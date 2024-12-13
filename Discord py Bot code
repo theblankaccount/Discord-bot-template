@@ -1,0 +1,198 @@
+import discord
+from discord.ext import commands
+import asyncio
+import json
+from collections import defaultdict
+
+# Set up the bot with intents
+intents = discord.Intents.default()
+intents.members = True
+intents.invites = True
+intents.messages = True
+intents.guilds = True
+intents.voice_states = True
+
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Leveling system data
+level_data = defaultdict(lambda: {"xp": 0, "level": 1})
+
+def save_levels():
+    with open("levels.json", "w") as f:
+        json.dump(level_data, f)
+
+def load_levels():
+    global level_data
+    try:
+        with open("levels.json", "r") as f:
+            level_data = json.load(f)
+    except FileNotFoundError:
+        pass
+
+# Event when the bot is ready
+@bot.event
+async def on_ready():
+    load_levels()
+    print(f'Logged in as {bot.user.name} - {bot.user.id}')
+
+# Join/leave notifications
+@bot.event
+async def on_member_join(member):
+    channel = discord.utils.get(member.guild.text_channels, name='general')  # Change 'general' to your channel name
+    if channel:
+        await channel.send(f'Welcome to the server, {member.mention}!')
+
+@bot.event
+async def on_member_remove(member):
+    channel = discord.utils.get(member.guild.text_channels, name='general')  # Change 'general' to your channel name
+    if channel:
+        await channel.send(f'{member.mention} has left the server. Goodbye!')
+
+def is_owner(ctx):
+    return ctx.author.guild_permissions.administrator
+
+# Mute command
+@bot.command()
+@commands.check(is_owner)
+async def mute(ctx, member: discord.Member):
+    if ctx.guild.me.top_role > member.top_role:
+        await member.edit(mute=True)
+        await ctx.send(f'{member.mention} has been muted.')
+    else:
+        await ctx.send("I cannot mute this member.")
+
+# Unmute command
+@bot.command()
+@commands.check(is_owner)
+async def unmute(ctx, member: discord.Member):
+    if ctx.guild.me.top_role > member.top_role:
+        await member.edit(mute=False)
+        await ctx.send(f'{member.mention} has been unmuted.')
+    else:
+        await ctx.send("I cannot unmute this member.")
+
+# Ban command
+@bot.command()
+@commands.check(is_owner)
+async def ban(ctx, member: discord.Member, *, reason=None):
+    await member.ban(reason=reason)
+    await ctx.send(f'{member.mention} has been banned.')
+
+# Unban command
+@bot.command()
+@commands.check(is_owner)
+async def unban(ctx, member: discord.User):
+    await ctx.guild.unban(member)
+    await ctx.send(f'{member.mention} has been unbanned.')
+
+# Temporary ban command
+@bot.command()
+@commands.check(is_owner)
+async def tempban(ctx, member: discord.Member, duration: int, *, reason=None):
+    await member.ban(reason=reason)
+    await ctx.send(f'{member.mention} has been temporarily banned for {duration} seconds.')
+
+    await asyncio.sleep(duration)
+
+    await ctx.guild.unban(member)
+    await ctx.send(f'{member.mention} has been unbanned after {duration} seconds.')
+
+# Leveling system
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # Level up logic
+    level_data[str(message.author.id)]["xp"] += 1
+    xp = level_data[str(message.author.id)]["xp"]
+    level = level_data[str(message.author.id)]["level"]
+
+    if xp >= level * 5:  # Set the XP required for leveling up
+        level_data[str(message.author.id)]["level"] += 1
+        level_data[str(message.author.id)]["xp"] = 0
+        await message.channel.send(f'{message.author.mention} has leveled up to level {level + 1}!')
+
+    save_levels()
+    await bot.process_commands(message)
+
+# Track invites
+@bot.event
+async def on_invite_create(invite):
+    print(f'Invite created: {invite.code}, created by: {invite.inviter}')
+
+@bot.event
+async def on_member_update(before, after):
+    if before.guild is None or after.guild is None:
+        return
+
+    invites_before = await before.guild.invites()
+    invites_after = await after.guild.invites()
+
+    for invite in invites_before:
+        for invite_after in invites_after:
+            if invite.code == invite_after.code and invite.uses < invite_after.uses:
+                print(f'{after.name} joined using invite: {invite.code}')
+
+# Lock channel command
+@bot.command()
+@commands.check(is_owner)
+async def lock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False)
+    await ctx.send(f'{ctx.channel.mention} has been locked.')
+
+# Unlock channel command
+@bot.command()
+@commands.check(is_owner)
+async def unlock(ctx):
+    await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=True)
+    await ctx.send(f'{ctx.channel.mention} has been unlocked.')
+
+# Warn command
+@bot.command()
+@commands.check(is_owner)
+async def warn(ctx, member: discord.Member, *, reason=None):
+    await ctx.send(f'{member.mention} has been warned for: {reason}')
+
+# Set nickname command
+@bot.command()
+@commands.check(is_owner)
+async def setnick(ctx, member: discord.Member, *, nickname: str):
+    await member.edit(nick=nickname)
+    await ctx.send(f'Nickname for {member.mention} has been set to {nickname}.')
+
+# Unnickname command
+@bot.command()
+@commands.check(is_owner)
+async def unnickname(ctx, member: discord.Member):
+    await member.edit(nick=None)
+    await ctx.send(f'Nickname for {member.mention} has been removed.')
+
+# Member count command
+@bot.command()
+async def membercount(ctx):
+    user_count = ctx.guild.member_count
+    bot_count = sum(1 for member in ctx.guild.members if member.bot)
+    await ctx.send(f'Total members: {user_count}, Bots: {bot_count}')
+
+# Kick command
+@bot.command()
+@commands.check(is_owner)
+async def kick(ctx, member: discord.Member, duration: int = 0):
+    await member.kick(reason="Kicked by bot.")
+    await ctx.send(f'{member.mention} has been kicked from the server.')
+
+    if duration > 0:
+        await asyncio.sleep(duration)
+        await ctx.guild.unban(member)
+        await ctx.send(f'{member.mention} has been unbanned after {duration} seconds.')
+
+# Nuke command to clear all messages in a channel
+@bot.command()
+@commands.check(is_owner)
+async def nuke(ctx):
+    await ctx.channel.purge()
+    await ctx.send("All messages have been cleared from this channel.", delete_after=5)
+
+# Run the bot with the token
+TOKEN = 'YOUR_BOT_TOKEN_HERE'  #
